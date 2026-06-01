@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  Images,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -22,9 +23,9 @@ import {
   Users,
   X
 } from "lucide-react";
-import type { AdminData, Garment, Order, Product, ProductStatus } from "@/lib/types";
+import type { AdminData, Garment, Order, Product, ProductStatus, PublicFeedPhoto } from "@/lib/types";
 
-type Tab = "overview" | "accounts" | "marketplace" | "orders";
+type Tab = "overview" | "accounts" | "marketplace" | "orders" | "public-feed";
 
 type ProductFormState = {
   title: string;
@@ -62,7 +63,8 @@ const tabs: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "accounts", label: "Accounts", icon: Users },
   { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
-  { id: "orders", label: "Orders", icon: PackageCheck }
+  { id: "orders", label: "Orders", icon: PackageCheck },
+  { id: "public-feed", label: "Public Feed", icon: Images }
 ];
 
 function formatDate(value: string) {
@@ -250,6 +252,7 @@ export function AdminDashboard({
   const [accountSearch, setAccountSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
+  const [publicFeedSearch, setPublicFeedSearch] = useState("");
   const [garmentType, setGarmentType] = useState("tshirt");
   const [createdGarment, setCreatedGarment] = useState<Garment | null>(null);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<number, boolean>>({});
@@ -268,7 +271,8 @@ export function AdminDashboard({
       accounts: data.garments.length,
       products: `${availableProducts}/${data.products.length}`,
       orders: paidOrders,
-      revenue: formatAmount(revenue, "eur")
+      revenue: formatAmount(revenue, "eur"),
+      publicFeed: data.publicFeedPhotos.length
     };
   }, [data]);
 
@@ -296,6 +300,14 @@ export function AdminDashboard({
     ));
   }, [data.orders, orderSearch]);
 
+  const filteredPublicFeedPhotos = useMemo(() => {
+    const needle = publicFeedSearch.trim().toLowerCase();
+    if (!needle) return data.publicFeedPhotos;
+    return data.publicFeedPhotos.filter((photo) => (
+      `${photo.id} ${photo.email ?? ""} ${photo.captureMode} ${photo.moderationStatus} ${photo.userAgent ?? ""}`.toLowerCase().includes(needle)
+    ));
+  }, [data.publicFeedPhotos, publicFeedSearch]);
+
   function imageUrl(src: string) {
     if (!src) return "";
     if (src.startsWith("http://") || src.startsWith("https://")) return src;
@@ -307,12 +319,21 @@ export function AdminDashboard({
     setBusy("refresh");
     setError("");
     try {
-      const [garments, products, orders] = await Promise.all([
+      const [garments, products, orders, publicFeedQr, publicFeedPhotos] = await Promise.all([
         adminApi<{ garments: Garment[] }>("/garments"),
         adminApi<{ products: Product[] }>("/products"),
-        adminApi<{ orders: Order[] }>("/orders")
+        adminApi<{ orders: Order[] }>("/orders"),
+        adminApi<{ qr: Garment | null }>("/public-feed/qr"),
+        adminApi<{ photos: PublicFeedPhoto[] }>("/public-feed/photos")
       ]);
-      setData({ garments: garments.garments, products: products.products, orders: orders.orders, errors: [] });
+      setData({
+        garments: garments.garments,
+        products: products.products,
+        orders: orders.orders,
+        publicFeedQr: publicFeedQr.qr,
+        publicFeedPhotos: publicFeedPhotos.photos,
+        errors: []
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to refresh admin data.");
     } finally {
@@ -426,6 +447,23 @@ export function AdminDashboard({
     }
   }
 
+  async function deletePublicFeedPhoto(photo: PublicFeedPhoto) {
+    if (!window.confirm(`Delete public feed photo #${photo.id}?`)) return;
+    setBusy(`public-feed-${photo.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/public-feed/photos/${photo.id}`, { method: "DELETE" });
+      setData((current) => ({
+        ...current,
+        publicFeedPhotos: current.publicFeedPhotos.filter((item) => item.id !== photo.id)
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete public feed photo.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   function startProductEdit(product: Product) {
     setEditingProductId(product.id);
     setEditProduct(formFromProduct(product));
@@ -520,15 +558,16 @@ export function AdminDashboard({
             <p className="mt-4 rounded-lg border border-red/30 bg-red/10 px-3 py-2 text-sm font-bold text-red">{error}</p>
           ) : null}
 
-          <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <Stat label="Client accounts" value={stats.accounts} />
             <Stat label="Live products" value={stats.products} />
             <Stat label="Paid orders" value={stats.orders} />
             <Stat label="Gross paid" value={stats.revenue} />
+            <Stat label="Public photos" value={stats.publicFeed} />
           </section>
 
           {activeTab === "overview" ? (
-            <section className="mt-6 grid gap-4 xl:grid-cols-3">
+            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <button type="button" onClick={() => setActiveTab("accounts")} className="rounded-lg border border-line bg-bone p-5 text-left shadow-soft">
                 <Users className="text-red" size={24} aria-hidden="true" />
                 <p className="mt-5 text-xl font-black uppercase">Accounts</p>
@@ -543,6 +582,11 @@ export function AdminDashboard({
                 <PackageCheck className="text-red" size={24} aria-hidden="true" />
                 <p className="mt-5 text-xl font-black uppercase">Orders</p>
                 <p className="mt-2 text-sm font-bold text-stone">{data.orders.length} Stripe records</p>
+              </button>
+              <button type="button" onClick={() => setActiveTab("public-feed")} className="rounded-lg border border-line bg-bone p-5 text-left shadow-soft">
+                <Images className="text-red" size={24} aria-hidden="true" />
+                <p className="mt-5 text-xl font-black uppercase">Public Feed</p>
+                <p className="mt-2 text-sm font-bold text-stone">{data.publicFeedPhotos.length} sticker captures</p>
               </button>
             </section>
           ) : null}
@@ -738,6 +782,113 @@ export function AdminDashboard({
                     );
                   })}
                   {filteredProducts.length === 0 ? <p className="rounded-lg border border-line bg-bone p-4 text-sm font-bold text-stone">No products found.</p> : null}
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "public-feed" ? (
+            <section className="mt-6 grid gap-5 xl:grid-cols-[380px_1fr]">
+              <div className="rounded-lg border border-line bg-bone p-4 shadow-soft">
+                <div className="flex items-center gap-2">
+                  <QrCode className="text-red" size={21} aria-hidden="true" />
+                  <h2 className="text-lg font-black uppercase">Sticker QR</h2>
+                </div>
+                <p className="mt-3 text-sm font-bold leading-6 text-stone">
+                  Use this special QR for stickers. Captures sent through it can appear on the public marketplace homepage feed.
+                </p>
+
+                {data.publicFeedQr ? (
+                  <div className="mt-5 border-t border-line pt-5">
+                    <img src={data.publicFeedQr.qrCodeUrl} alt="" className="aspect-square w-full rounded-lg border border-line bg-white object-contain" />
+                    <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Capture URL</p>
+                    <p className="mt-1 break-all rounded-lg bg-white px-3 py-2 font-mono text-sm text-red">{data.publicFeedQr.captureUrl}</p>
+                    <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Public token</p>
+                    <p className="mt-1 break-all rounded-lg bg-white px-3 py-2 font-mono text-sm text-ink">{data.publicFeedQr.publicToken}</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => copy(data.publicFeedQr?.captureUrl ?? "")} className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase">
+                        <Copy size={15} aria-hidden="true" />
+                        URL
+                      </button>
+                      <button type="button" onClick={() => copy(data.publicFeedQr?.qrCodeUrl ?? "")} className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase">
+                        <Copy size={15} aria-hidden="true" />
+                        QR image
+                      </button>
+                      <a href={data.publicFeedQr.captureUrl} target="_blank" rel="noreferrer" className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase">
+                        <ExternalLink size={15} aria-hidden="true" />
+                        Open
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-5 rounded-lg border border-red/30 bg-red/10 px-3 py-2 text-sm font-bold text-red">
+                    The special QR is not available yet. Refresh after the backend is configured.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <h2 className="text-lg font-black uppercase">Public feed images</h2>
+                  {searchBox(publicFeedSearch, setPublicFeedSearch, "Search public images")}
+                </div>
+                <div className="grid gap-3">
+                  {filteredPublicFeedPhotos.map((photo) => (
+                    <article key={photo.id} className="rounded-lg border border-line bg-bone p-4 shadow-soft">
+                      <div className="grid gap-4 md:grid-cols-[180px_1fr]">
+                        <div className="relative aspect-[4/5] overflow-hidden rounded-lg border border-line bg-white">
+                          <img src={imageUrl(photo.imageUrl)} alt="" className="h-full w-full object-cover" />
+                          <span className="absolute left-2 top-2 rounded-lg bg-ink/80 px-2 py-1 font-mono text-[10px] font-black uppercase text-white">
+                            {photo.primaryLabel ?? "Rear"}
+                          </span>
+                          {photo.secondaryImageUrl ? (
+                            <div className="absolute right-2 top-2 h-[42%] w-[36%] overflow-hidden rounded-lg border-2 border-white bg-ink shadow-soft">
+                              <img src={imageUrl(photo.secondaryImageUrl)} alt="" className="h-full w-full object-cover" />
+                              <span className="absolute left-1 top-1 rounded-md bg-ink/80 px-1.5 py-0.5 font-mono text-[8px] font-black uppercase text-white">
+                                {photo.secondaryLabel ?? "Front"}
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-lg font-black uppercase">Photo #{photo.id}</p>
+                            <span className="rounded-lg bg-red/10 px-2 py-1 text-xs font-black uppercase text-red">{photo.moderationStatus}</span>
+                            <span className="rounded-lg bg-white px-2 py-1 text-xs font-black uppercase text-stone">{photo.captureMode}</span>
+                          </div>
+                          <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Email</p>
+                          <p className="mt-1 break-all text-sm font-bold text-ink">{photo.email ?? "No email"}</p>
+                          <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Created</p>
+                          <p className="mt-1 font-mono text-sm font-bold text-ink">{formatDate(photo.createdAt)}</p>
+                          <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Consent</p>
+                          <p className="mt-1 text-sm font-bold text-ink">{photo.marketingConsent ? "Marketing consent accepted" : "No marketing consent recorded"}</p>
+                          <p className="mt-3 break-all font-mono text-xs text-stone">{photo.userAgent ?? "No user agent"}</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {photo.email ? (
+                          <button type="button" onClick={() => copy(photo.email ?? "")} className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase">
+                            <Copy size={15} aria-hidden="true" />
+                            Email
+                          </button>
+                        ) : null}
+                        <a href={photo.imageUrl} target="_blank" rel="noreferrer" className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase">
+                          <ExternalLink size={15} aria-hidden="true" />
+                          Image
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => deletePublicFeedPhoto(photo)}
+                          disabled={busy === `public-feed-${photo.id}`}
+                          className="flex h-10 items-center gap-2 rounded-lg border border-red/30 bg-red/10 px-3 text-xs font-black uppercase text-red disabled:opacity-60"
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          Delete
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                  {filteredPublicFeedPhotos.length === 0 ? <p className="rounded-lg border border-line bg-bone p-4 text-sm font-bold text-stone">No public feed images found.</p> : null}
                 </div>
               </div>
             </section>

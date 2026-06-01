@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { AdminData, Garment, Order, Product } from "./types";
+import type { AdminData, Garment, Order, Product, PublicFeedPhoto } from "./types";
 
 const DEFAULT_BACKEND_URL = process.env.NODE_ENV === "production"
   ? "https://back-saudade.thehnh.tech"
@@ -78,16 +78,20 @@ async function settle<T>(label: string, promise: Promise<T>, fallback: T) {
 }
 
 export async function loadAdminData(token: string): Promise<AdminData> {
-  const [garments, products, orders] = await Promise.all([
+  const [garments, products, orders, publicFeedQr, publicFeedPhotos] = await Promise.all([
     settle("accounts", fetchAdmin<{ garments: Garment[] }>("/api/admin/garments", token), { garments: [] }),
     settle("marketplace", fetchAdmin<{ products: Product[] }>("/api/admin/products", token), { products: [] }),
-    settle("orders", fetchAdmin<{ orders: Order[] }>("/api/admin/orders", token), { orders: [] })
+    settle("orders", fetchAdmin<{ orders: Order[] }>("/api/admin/orders", token), { orders: [] }),
+    settle("public feed QR", fetchAdmin<{ qr: Garment | null }>("/api/admin/public-feed/qr", token), { qr: null }),
+    settle("public feed photos", fetchAdmin<{ photos: PublicFeedPhoto[] }>("/api/admin/public-feed/photos", token), { photos: [] })
   ]);
 
   return {
     garments: garments.value.garments,
     products: products.value.products,
     orders: orders.value.orders,
-    errors: [garments.error, products.error, orders.error].filter((error): error is string => Boolean(error))
+    publicFeedQr: publicFeedQr.value.qr,
+    publicFeedPhotos: publicFeedPhotos.value.photos,
+    errors: [garments.error, products.error, orders.error, publicFeedQr.error, publicFeedPhotos.error].filter((error): error is string => Boolean(error))
   };
 }

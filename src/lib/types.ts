@@ -1,6 +1,8 @@
 export type Garment = {
   id: number;
   type: string;
+  purpose?: "client-feed" | "public-feed";
+  captureKind?: "client-feed" | "public-feed";
   publicToken: string;
   clientId: string;
   qrCodeUrl: string;
@@ -58,9 +60,27 @@ export type Order = {
   updatedAt: string;
 };
 
+export type PublicFeedPhoto = {
+  id: number;
+  garmentId: number;
+  imageUrl: string;
+  secondaryImageUrl: string | null;
+  createdAt: string;
+  captureMode: string;
+  primaryLabel?: string;
+  secondaryLabel?: string | null;
+  uploaderIp: string | null;
+  email: string | null;
+  marketingConsent: boolean;
+  moderationStatus: string;
+  userAgent: string | null;
+};
+
 export type AdminData = {
   garments: Garment[];
   products: Product[];
   orders: Order[];
+  publicFeedQr: Garment | null;
+  publicFeedPhotos: PublicFeedPhoto[];
   errors: string[];
 };
