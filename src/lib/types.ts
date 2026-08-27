@@ -76,11 +76,56 @@ export type PublicFeedPhoto = {
   userAgent: string | null;
 };
 
+export type AroundReportStatus = "open" | "actioned" | "dismissed";
+
+export type AroundReportedPhoto = {
+  id: string;
+  aroundId: string;
+  uploaderPseudo: string;
+  status: "pending" | "approved" | "rejected" | "removed_by_moderation";
+  /** null once the photo is purged (server emits null when purgeState !== "live"). */
+  rearUrl: string | null;
+  frontUrl?: string | null;
+};
+
+export type AroundReportedUser = {
+  id: string;
+  pseudo: string;
+  status: "active" | "banned";
+};
+
+export type AroundReport = {
+  id: string;
+  targetType: "photo" | "user";
+  reason: string;
+  comment?: string | null;
+  status: AroundReportStatus;
+  createdAt: string;
+  reporterPseudo: string;
+  photo?: AroundReportedPhoto | null;
+  user?: AroundReportedUser | null;
+};
+
+export type AroundSummary = {
+  id: string;
+  name?: string | null;
+  ownerPseudo?: string | null;
+  status: "active" | "closed" | "purging" | "purged";
+  memberCount: number;
+  photoCount: number;
+  radiusM: number;
+  captureEndsAt: string;
+  expiresAt: string;
+  createdAt: string;
+};
+
 export type AdminData = {
   garments: Garment[];
   products: Product[];
   orders: Order[];
   publicFeedQr: Garment | null;
   publicFeedPhotos: PublicFeedPhoto[];
+  aroundReports: AroundReport[];
+  arounds: AroundSummary[];
   errors: string[];
 };

@@ -2,30 +2,47 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import {
+  Ban,
   Boxes,
   Copy,
   ExternalLink,
   Eye,
   EyeOff,
+  Flag,
   Images,
   LayoutDashboard,
   LogOut,
   Mail,
+  MapPin,
   PackageCheck,
   Plus,
   QrCode,
   RefreshCw,
   Save,
   Search,
+  ShieldAlert,
   Shirt,
   ShoppingBag,
   Trash2,
   Users,
+  UserX,
   X
 } from "lucide-react";
-import type { AdminData, Garment, Order, Product, ProductStatus, PublicFeedPhoto } from "@/lib/types";
+import type {
+  AdminData,
+  AroundReport,
+  AroundReportedPhoto,
+  AroundReportedUser,
+  AroundReportStatus,
+  AroundSummary,
+  Garment,
+  Order,
+  Product,
+  ProductStatus,
+  PublicFeedPhoto
+} from "@/lib/types";
 
-type Tab = "overview" | "accounts" | "marketplace" | "orders" | "public-feed";
+type Tab = "overview" | "accounts" | "marketplace" | "orders" | "public-feed" | "moderation";
 
 type ProductFormState = {
   title: string;
@@ -64,8 +81,15 @@ const tabs: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> = [
   { id: "accounts", label: "Accounts", icon: Users },
   { id: "marketplace", label: "Marketplace", icon: ShoppingBag },
   { id: "orders", label: "Orders", icon: PackageCheck },
-  { id: "public-feed", label: "Public Feed", icon: Images }
+  { id: "public-feed", label: "Public Feed", icon: Images },
+  { id: "moderation", label: "Moderation", icon: ShieldAlert }
 ];
+
+function reportStatusBadgeClass(status: AroundReportStatus) {
+  if (status === "open") return "bg-red/10 text-red";
+  if (status === "actioned") return "bg-ink/80 text-white";
+  return "bg-white text-stone";
+}
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -253,6 +277,7 @@ export function AdminDashboard({
   const [productSearch, setProductSearch] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
   const [publicFeedSearch, setPublicFeedSearch] = useState("");
+  const [showResolvedReports, setShowResolvedReports] = useState(false);
   const [garmentType, setGarmentType] = useState("tshirt");
   const [createdGarment, setCreatedGarment] = useState<Garment | null>(null);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<number, boolean>>({});
@@ -308,6 +333,23 @@ export function AdminDashboard({
     ));
   }, [data.publicFeedPhotos, publicFeedSearch]);
 
+  const openReportCount = useMemo(
+    () => data.aroundReports.filter((report) => report.status === "open").length,
+    [data.aroundReports]
+  );
+
+  const visibleReports = useMemo(() => {
+    const reports = showResolvedReports
+      ? data.aroundReports
+      : data.aroundReports.filter((report) => report.status === "open");
+    return [...reports].sort((a, b) => {
+      const aOpen = a.status === "open" ? 0 : 1;
+      const bOpen = b.status === "open" ? 0 : 1;
+      if (aOpen !== bOpen) return aOpen - bOpen;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [data.aroundReports, showResolvedReports]);
+
   function imageUrl(src: string) {
     if (!src) return "";
     if (src.startsWith("http://") || src.startsWith("https://")) return src;
@@ -326,14 +368,31 @@ export function AdminDashboard({
         adminApi<{ qr: Garment | null }>("/public-feed/qr"),
         adminApi<{ photos: PublicFeedPhoto[] }>("/public-feed/photos")
       ]);
+      const [aroundReports, arounds] = await Promise.allSettled([
+        adminApi<{ reports: AroundReport[] }>("/around/reports?status=all"),
+        adminApi<{ arounds: AroundSummary[] }>("/around/arounds")
+      ]);
       setData({
         garments: garments.garments,
         products: products.products,
         orders: orders.orders,
         publicFeedQr: publicFeedQr.qr,
         publicFeedPhotos: publicFeedPhotos.photos,
+        aroundReports: aroundReports.status === "fulfilled" ? aroundReports.value.reports : [],
+        arounds: arounds.status === "fulfilled" ? arounds.value.arounds : [],
         errors: []
       });
+      const moderationErrors = [
+        aroundReports.status === "rejected"
+          ? `moderation reports: ${aroundReports.reason instanceof Error ? aroundReports.reason.message : "Request failed"}`
+          : null,
+        arounds.status === "rejected"
+          ? `arounds: ${arounds.reason instanceof Error ? arounds.reason.message : "Request failed"}`
+          : null
+      ].filter((item): item is string => Boolean(item));
+      if (moderationErrors.length > 0) {
+        setError(moderationErrors.join(" | "));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to refresh admin data.");
     } finally {
@@ -459,6 +518,71 @@ export function AdminDashboard({
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete public feed photo.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function reloadModeration() {
+    const [reports, arounds] = await Promise.all([
+      adminApi<{ reports: AroundReport[] }>("/around/reports?status=all"),
+      adminApi<{ arounds: AroundSummary[] }>("/around/arounds")
+    ]);
+    setData((current) => ({ ...current, aroundReports: reports.reports, arounds: arounds.arounds }));
+  }
+
+  async function dismissReport(report: AroundReport) {
+    if (!window.confirm("Dismiss this report? It will be marked as reviewed with no action taken.")) return;
+    setBusy(`report-${report.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/around/reports/${report.id}/dismiss`, { method: "POST" });
+      await reloadModeration();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to dismiss report.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteReportedPhoto(report: AroundReport, photo: AroundReportedPhoto) {
+    if (!window.confirm(`Delete reported photo by ${photo.uploaderPseudo}? The image is destroyed permanently.`)) return;
+    setBusy(`report-${report.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/around/photos/${photo.id}`, { method: "DELETE" });
+      await reloadModeration();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete photo.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function toggleAroundUserBan(report: AroundReport, user: AroundReportedUser) {
+    const ban = user.status !== "banned";
+    if (!window.confirm(`${ban ? "Ban" : "Unban"} ${user.pseudo}?`)) return;
+    setBusy(`report-${report.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/around/users/${user.id}/${ban ? "ban" : "unban"}`, { method: "POST" });
+      await reloadModeration();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Unable to ${ban ? "ban" : "unban"} user.`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function purgeAround(around: AroundSummary) {
+    if (!window.confirm(`Purge around "${around.name || around.id}"? All its photos are destroyed immediately.`)) return;
+    setBusy(`around-${around.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/around/arounds/${around.id}`, { method: "DELETE" });
+      await reloadModeration();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to purge around.");
     } finally {
       setBusy("");
     }
@@ -940,6 +1064,206 @@ export function AdminDashboard({
                   </article>
                 ))}
                 {filteredOrders.length === 0 ? <p className="rounded-lg border border-line bg-bone p-4 text-sm font-bold text-stone">No orders found.</p> : null}
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "moderation" ? (
+            <section className="mt-6 grid gap-6">
+              <div>
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Flag className="text-red" size={21} aria-hidden="true" />
+                    <h2 className="text-lg font-black uppercase">Reports</h2>
+                    <span className="rounded-lg bg-red/10 px-2 py-1 text-xs font-black uppercase text-red">{openReportCount} open</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowResolvedReports((current) => !current)}
+                    className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase"
+                  >
+                    {showResolvedReports ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}
+                    {showResolvedReports ? "Open only" : "Show all"}
+                  </button>
+                </div>
+                <div className="grid gap-3">
+                  {visibleReports.map((report) => {
+                    const photo = report.photo ?? null;
+                    const reportedUser = report.user ?? null;
+                    const reportBusy = busy === `report-${report.id}`;
+                    return (
+                      <article key={report.id} className="rounded-lg border border-line bg-bone p-4 shadow-soft">
+                        <div className="grid gap-4 md:grid-cols-[180px_1fr]">
+                          {photo ? (
+                            <div className="relative aspect-[4/5] overflow-hidden rounded-lg border border-line bg-white">
+                              {photo.rearUrl ? (
+                                <img src={photo.rearUrl} alt="" className="h-full w-full object-cover" />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center p-2 text-center text-xs font-black uppercase text-stone">
+                                  Photo purgée
+                                </div>
+                              )}
+                              <span className="absolute left-2 top-2 rounded-lg bg-ink/80 px-2 py-1 font-mono text-[10px] font-black uppercase text-white">
+                                Rear
+                              </span>
+                              {photo.frontUrl ? (
+                                <div className="absolute right-2 top-2 h-[42%] w-[36%] overflow-hidden rounded-lg border-2 border-white bg-ink shadow-soft">
+                                  <img src={photo.frontUrl} alt="" className="h-full w-full object-cover" />
+                                  <span className="absolute left-1 top-1 rounded-md bg-ink/80 px-1.5 py-0.5 font-mono text-[8px] font-black uppercase text-white">
+                                    Front
+                                  </span>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="flex aspect-[4/5] items-center justify-center rounded-lg border border-line bg-white">
+                              <UserX className="text-red" size={40} aria-hidden="true" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-lg font-black uppercase">{report.targetType === "photo" ? "Photo report" : "User report"}</p>
+                              <span className="rounded-lg bg-red/10 px-2 py-1 text-xs font-black uppercase text-red">{report.reason}</span>
+                              <span className={`rounded-lg px-2 py-1 text-xs font-black uppercase ${reportStatusBadgeClass(report.status)}`}>{report.status}</span>
+                            </div>
+                            <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Reported by</p>
+                            <p className="mt-1 break-all text-sm font-bold text-ink">{report.reporterPseudo}</p>
+                            <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Created</p>
+                            <p className="mt-1 font-mono text-sm font-bold text-ink">{formatDate(report.createdAt)}</p>
+                            {report.comment ? (
+                              <>
+                                <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Comment</p>
+                                <p className="mt-1 break-words text-sm font-bold text-ink">{report.comment}</p>
+                              </>
+                            ) : null}
+                            {photo ? (
+                              <>
+                                <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Uploader</p>
+                                <p className="mt-1 break-all text-sm font-bold text-ink">
+                                  {photo.uploaderPseudo}
+                                  <span className="ml-2 rounded-lg bg-white px-2 py-1 text-xs font-black uppercase text-stone">{photo.status}</span>
+                                </p>
+                                <p className="mt-3 break-all font-mono text-xs text-stone">around {photo.aroundId}</p>
+                              </>
+                            ) : null}
+                            {reportedUser ? (
+                              <>
+                                <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">User</p>
+                                <p className="mt-1 break-all text-sm font-bold text-ink">
+                                  {reportedUser.pseudo}
+                                  <span className="ml-2 rounded-lg bg-white px-2 py-1 text-xs font-black uppercase text-stone">{reportedUser.status}</span>
+                                </p>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {photo ? (
+                            <button
+                              type="button"
+                              onClick={() => deleteReportedPhoto(report, photo)}
+                              disabled={reportBusy || photo.status === "removed_by_moderation"}
+                              className="flex h-10 items-center gap-2 rounded-lg border border-red/30 bg-red/10 px-3 text-xs font-black uppercase text-red disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Trash2 size={15} aria-hidden="true" />
+                              {photo.status === "removed_by_moderation" ? "Photo removed" : "Delete photo"}
+                            </button>
+                          ) : null}
+                          {reportedUser ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleAroundUserBan(report, reportedUser)}
+                              disabled={reportBusy}
+                              className="flex h-10 items-center gap-2 rounded-lg border border-red/30 bg-red/10 px-3 text-xs font-black uppercase text-red disabled:opacity-60"
+                            >
+                              <Ban size={15} aria-hidden="true" />
+                              {reportedUser.status === "banned" ? "Unban user" : "Ban user"}
+                            </button>
+                          ) : null}
+                          {report.status === "open" ? (
+                            <button
+                              type="button"
+                              onClick={() => dismissReport(report)}
+                              disabled={reportBusy}
+                              className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-black uppercase disabled:opacity-60"
+                            >
+                              <X size={15} aria-hidden="true" />
+                              Dismiss
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {visibleReports.length === 0 ? (
+                    <p className="rounded-lg border border-line bg-bone p-4 text-sm font-bold text-stone">
+                      {showResolvedReports ? "No reports found." : "No open reports."}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <MapPin className="text-red" size={21} aria-hidden="true" />
+                  <h2 className="text-lg font-black uppercase">Arounds</h2>
+                  <span className="rounded-lg bg-white px-2 py-1 text-xs font-black uppercase text-stone">{data.arounds.length}</span>
+                </div>
+                {data.arounds.length > 0 ? (
+                  <div className="overflow-x-auto rounded-lg border border-line bg-bone shadow-soft">
+                    <table className="w-full min-w-[920px] text-left">
+                      <thead>
+                        <tr className="border-b border-line">
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Name</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Owner</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Status</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Members</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Photos</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Radius</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Capture ends</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Expires</th>
+                          <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Created</th>
+                          <th className="px-4 py-3" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.arounds.map((around) => (
+                          <tr key={around.id} className="border-b border-line last:border-b-0">
+                            <td className="px-4 py-3">
+                              <p className="text-sm font-black uppercase text-ink">{around.name || "Untitled"}</p>
+                              <p className="mt-1 break-all font-mono text-[10px] text-stone">{around.id}</p>
+                            </td>
+                            <td className="px-4 py-3 text-sm font-bold text-ink">{around.ownerPseudo ?? "-"}</td>
+                            <td className="px-4 py-3">
+                              <span className={`rounded-lg px-2 py-1 text-xs font-black uppercase ${around.status === "active" ? "bg-red/10 text-red" : "bg-white text-stone"}`}>
+                                {around.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-sm font-black text-ink">{around.memberCount}</td>
+                            <td className="px-4 py-3 text-sm font-black text-ink">{around.photoCount}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-ink">{around.radiusM} m</td>
+                            <td className="px-4 py-3 font-mono text-xs font-bold text-ink">{formatDate(around.captureEndsAt)}</td>
+                            <td className="px-4 py-3 font-mono text-xs font-bold text-ink">{formatDate(around.expiresAt)}</td>
+                            <td className="px-4 py-3 font-mono text-xs font-bold text-ink">{formatDate(around.createdAt)}</td>
+                            <td className="px-4 py-3">
+                              <button
+                                type="button"
+                                onClick={() => purgeAround(around)}
+                                disabled={busy === `around-${around.id}` || around.status === "purged"}
+                                className="flex h-10 items-center gap-2 rounded-lg border border-red/30 bg-red/10 px-3 text-xs font-black uppercase text-red disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Trash2 size={15} aria-hidden="true" />
+                                Purge
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-line bg-bone p-4 text-sm font-bold text-stone">No arounds found.</p>
+                )}
               </div>
             </section>
           ) : null}

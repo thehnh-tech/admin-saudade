@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { AdminData, Garment, Order, Product, PublicFeedPhoto } from "./types";
+import type { AdminData, AroundReport, AroundSummary, Garment, Order, Product, PublicFeedPhoto } from "./types";
 
 const DEFAULT_BACKEND_URL = process.env.NODE_ENV === "production"
   ? "https://back-saudade.thehnh.tech"
@@ -78,12 +78,14 @@ async function settle<T>(label: string, promise: Promise<T>, fallback: T) {
 }
 
 export async function loadAdminData(token: string): Promise<AdminData> {
-  const [garments, products, orders, publicFeedQr, publicFeedPhotos] = await Promise.all([
+  const [garments, products, orders, publicFeedQr, publicFeedPhotos, aroundReports, arounds] = await Promise.all([
     settle("accounts", fetchAdmin<{ garments: Garment[] }>("/api/admin/garments", token), { garments: [] }),
     settle("marketplace", fetchAdmin<{ products: Product[] }>("/api/admin/products", token), { products: [] }),
     settle("orders", fetchAdmin<{ orders: Order[] }>("/api/admin/orders", token), { orders: [] }),
     settle("public feed QR", fetchAdmin<{ qr: Garment | null }>("/api/admin/public-feed/qr", token), { qr: null }),
-    settle("public feed photos", fetchAdmin<{ photos: PublicFeedPhoto[] }>("/api/admin/public-feed/photos", token), { photos: [] })
+    settle("public feed photos", fetchAdmin<{ photos: PublicFeedPhoto[] }>("/api/admin/public-feed/photos", token), { photos: [] }),
+    settle("moderation reports", fetchAdmin<{ reports: AroundReport[] }>("/api/admin/around/reports?status=all", token), { reports: [] }),
+    settle("arounds", fetchAdmin<{ arounds: AroundSummary[] }>("/api/admin/around/arounds", token), { arounds: [] })
   ]);
 
   return {
@@ -92,6 +94,8 @@ export async function loadAdminData(token: string): Promise<AdminData> {
     orders: orders.value.orders,
     publicFeedQr: publicFeedQr.value.qr,
     publicFeedPhotos: publicFeedPhotos.value.photos,
-    errors: [garments.error, products.error, orders.error, publicFeedQr.error, publicFeedPhotos.error].filter((error): error is string => Boolean(error))
+    aroundReports: aroundReports.value.reports,
+    arounds: arounds.value.arounds,
+    errors: [garments.error, products.error, orders.error, publicFeedQr.error, publicFeedPhotos.error, aroundReports.error, arounds.error].filter((error): error is string => Boolean(error))
   };
 }
