@@ -94,9 +94,24 @@ export type AroundReportedUser = {
   status: "active" | "banned";
 };
 
+/**
+ * A reported around: the reported content IS its name, and the report can come
+ * from someone who never joined (they only received the push notification).
+ * Neither `photo` nor `user` is set on such a report.
+ */
+export type AroundReportedAround = {
+  id: string;
+  name: string | null;
+  ownerId: string;
+  ownerPseudo: string;
+  status: "active" | "closed" | "purging" | "purged";
+  memberCount: number;
+  photoCount: number;
+};
+
 export type AroundReport = {
   id: string;
-  targetType: "photo" | "user";
+  targetType: "photo" | "user" | "around";
   reason: string;
   comment?: string | null;
   status: AroundReportStatus;
@@ -104,6 +119,7 @@ export type AroundReport = {
   reporterPseudo: string;
   photo?: AroundReportedPhoto | null;
   user?: AroundReportedUser | null;
+  around?: AroundReportedAround | null;
 };
 
 export type AroundSummary = {

@@ -31,6 +31,7 @@ import {
 import type {
   AdminData,
   AroundReport,
+  AroundReportedAround,
   AroundReportedPhoto,
   AroundReportedUser,
   AroundReportStatus,
@@ -574,6 +575,38 @@ export function AdminDashboard({
     }
   }
 
+  // A reported around: the reported content is its NAME. Purging destroys its
+  // photos, closes it and clears the name server-side — that is the action the
+  // Terms describe ("a name that breaches these Terms is removed together with
+  // the around it names").
+  async function purgeReportedAround(report: AroundReport, around: AroundReportedAround) {
+    if (!window.confirm(`Purge around "${around.name || around.id}" by ${around.ownerPseudo}? All its photos are destroyed immediately and its name is cleared.`)) return;
+    setBusy(`report-${report.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/around/arounds/${around.id}`, { method: "DELETE" });
+      await reloadModeration();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to purge around.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function banReportedAroundOwner(report: AroundReport, around: AroundReportedAround) {
+    if (!window.confirm(`Ban ${around.ownerPseudo}, owner of this around?`)) return;
+    setBusy(`report-${report.id}`);
+    setError("");
+    try {
+      await adminApi<{ ok: true }>(`/around/users/${around.ownerId}/ban`, { method: "POST" });
+      await reloadModeration();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to ban user.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function purgeAround(around: AroundSummary) {
     if (!window.confirm(`Purge around "${around.name || around.id}"? All its photos are destroyed immediately.`)) return;
     setBusy(`around-${around.id}`);
@@ -1090,6 +1123,10 @@ export function AdminDashboard({
                   {visibleReports.map((report) => {
                     const photo = report.photo ?? null;
                     const reportedUser = report.user ?? null;
+                    // An "around" report has neither a photo nor a user: the
+                    // reported content is the around's NAME. Rendering must not
+                    // assume one of the two is always present.
+                    const reportedAround = report.around ?? null;
                     const reportBusy = busy === `report-${report.id}`;
                     return (
                       <article key={report.id} className="rounded-lg border border-line bg-bone p-4 shadow-soft">
@@ -1117,12 +1154,22 @@ export function AdminDashboard({
                             </div>
                           ) : (
                             <div className="flex aspect-[4/5] items-center justify-center rounded-lg border border-line bg-white">
-                              <UserX className="text-red" size={40} aria-hidden="true" />
+                              {reportedAround ? (
+                                <MapPin className="text-red" size={40} aria-hidden="true" />
+                              ) : (
+                                <UserX className="text-red" size={40} aria-hidden="true" />
+                              )}
                             </div>
                           )}
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="text-lg font-black uppercase">{report.targetType === "photo" ? "Photo report" : "User report"}</p>
+                              <p className="text-lg font-black uppercase">
+                                {report.targetType === "photo"
+                                  ? "Photo report"
+                                  : report.targetType === "around"
+                                    ? "Around name report"
+                                    : "User report"}
+                              </p>
                               <span className="rounded-lg bg-red/10 px-2 py-1 text-xs font-black uppercase text-red">{report.reason}</span>
                               <span className={`rounded-lg px-2 py-1 text-xs font-black uppercase ${reportStatusBadgeClass(report.status)}`}>{report.status}</span>
                             </div>
@@ -1155,6 +1202,20 @@ export function AdminDashboard({
                                 </p>
                               </>
                             ) : null}
+                            {reportedAround ? (
+                              <>
+                                <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Around name</p>
+                                <p className="mt-1 break-words text-sm font-bold text-ink">
+                                  {reportedAround.name || "(no name)"}
+                                  <span className="ml-2 rounded-lg bg-white px-2 py-1 text-xs font-black uppercase text-stone">{reportedAround.status}</span>
+                                </p>
+                                <p className="mt-3 text-xs font-black uppercase tracking-[0.14em] text-stone">Owner</p>
+                                <p className="mt-1 break-all text-sm font-bold text-ink">{reportedAround.ownerPseudo}</p>
+                                <p className="mt-3 break-all font-mono text-xs text-stone">
+                                  around {reportedAround.id} · {reportedAround.memberCount} members · {reportedAround.photoCount} photos
+                                </p>
+                              </>
+                            ) : null}
                           </div>
                         </div>
                         <div className="mt-4 flex flex-wrap gap-2">
@@ -1179,6 +1240,28 @@ export function AdminDashboard({
                               <Ban size={15} aria-hidden="true" />
                               {reportedUser.status === "banned" ? "Unban user" : "Ban user"}
                             </button>
+                          ) : null}
+                          {reportedAround ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => purgeReportedAround(report, reportedAround)}
+                                disabled={reportBusy || reportedAround.status === "purged"}
+                                className="flex h-10 items-center gap-2 rounded-lg border border-red/30 bg-red/10 px-3 text-xs font-black uppercase text-red disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Trash2 size={15} aria-hidden="true" />
+                                {reportedAround.status === "purged" ? "Around purged" : "Purge around"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => banReportedAroundOwner(report, reportedAround)}
+                                disabled={reportBusy}
+                                className="flex h-10 items-center gap-2 rounded-lg border border-red/30 bg-red/10 px-3 text-xs font-black uppercase text-red disabled:opacity-60"
+                              >
+                                <Ban size={15} aria-hidden="true" />
+                                Ban owner
+                              </button>
+                            </>
                           ) : null}
                           {report.status === "open" ? (
                             <button

@@ -1,8 +1,10 @@
 node_modules/
 .next/
 dist/
-.env.local
-.env*.local
+# Environment files
+.env
+.env.*
+!.env.example
 .idea/
 tsconfig.tsbuildinfo
 *.pem
